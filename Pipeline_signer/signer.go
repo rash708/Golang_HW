@@ -13,6 +13,15 @@ func worker(j job, in, out chan interface{}, wg *sync.WaitGroup) {
 	j(in, out)
 }
 
+func hashing(data, hash string, counter int, res map[int]map[string]string, mu *sync.Mutex, wg *sync.WaitGroup) {
+	defer wg.Done()
+	rs := DataSignerCrc32(data)
+	mu.Lock()
+	res[counter][hash] = rs
+	mu.Unlock()
+
+}
+
 //ExecutePipeline SingleHash -> Multihash -> CombineResults
 func ExecutePipeline(f ...job) error {
 	wg := &sync.WaitGroup{} // инициализируем группу
@@ -34,70 +43,71 @@ func ExecutePipeline(f ...job) error {
 
 //SingleHash crc32(data)+"~"+crc32(md5(data))
 func SingleHash(in, out chan interface{}) {
-
-	//mu := &sync.Mutex{}
+	mu := &sync.Mutex{}
+	wg := &sync.WaitGroup{} // инициализируем группу
+	counter := 0
+	var resTemp = make(map[int]map[string]string) //
 	for dataRaw := range in {
-		var resTemp = make(map[string]string)
-		dataTmp, _ := dataRaw.(int)
+		counter++
+
+		mu.Lock()
+		resTemp[counter] = make(map[string]string)
+		mu.Unlock()
+
+		dataTmp := dataRaw.(int)
 		data := strconv.Itoa(dataTmp)
-
-		mu := &sync.Mutex{}
-		wg := &sync.WaitGroup{} // инициализируем группу
-
+		Md5 := DataSignerMd5(data)
 		wg.Add(2) // добавляем воркер
 
-		go func(res map[string]string, mu *sync.Mutex, wg *sync.WaitGroup) {
-			defer wg.Done()
-			Md5 := DataSignerCrc32(DataSignerMd5(data))
-			mu.Lock()
-			res["Md5"] = Md5
-			mu.Unlock()
-		}(resTemp, mu, wg)
+		go hashing(Md5, "Md5", counter, resTemp, mu, wg)
+		go hashing(data, "crc32", counter, resTemp, mu, wg)
 
-		go func(res map[string]string, mu *sync.Mutex, wg *sync.WaitGroup) {
-			defer wg.Done()
-			crc32 := DataSignerCrc32(data)
-			mu.Lock()
-			res["crc32"] = crc32
-			mu.Unlock()
-		}(resTemp, mu, wg)
+	}
 
-		wg.Wait()
-
-		res := resTemp["crc32"] + "~" + resTemp["Md5"]
+	wg.Wait()
+	for _, tmp := range resTemp {
+		res := tmp["crc32"] + "~" + tmp["Md5"]
 		fmt.Println(res)
 		out <- res
-
 	}
 }
 
+type myMap map[int]string
+
 //MultiHash crc32(th+data)), где data - резульат SingleHash
 func MultiHash(in, out chan interface{}) {
+	cur := ""
+	counter := 0
+	var temp = make(map[int]map[int]string)
+
+	mu := &sync.Mutex{}
+	wg := &sync.WaitGroup{} // инициализируем группу
+
 	for dataRaw := range in {
-		data, _ := dataRaw.(string)
+		data := dataRaw.(string)
+		counter++
 
-		var temp = make(map[int]string)
-		cur := ""
-
-		mu := &sync.Mutex{}
-		wg := &sync.WaitGroup{} // инициализируем группу
+		mu.Lock()
+		temp[counter] = make(map[int]string)
+		mu.Unlock()
 
 		for th := 0; th < 6; th++ {
 			wg.Add(1) // добавляем воркер
-			go func(th int, data, cur string, temp map[int]string, wg *sync.WaitGroup, mu *sync.Mutex) {
+			go func(th, counter int, data, cur string, temp map[int]map[int]string, mu *sync.Mutex, wg *sync.WaitGroup) {
 				cur = DataSignerCrc32(strconv.Itoa(th) + data)
 				fmt.Printf("%v "+cur+"\n", th)
 				mu.Lock()
-				temp[th] = cur
+				temp[counter][th] = cur
 				mu.Unlock()
 				wg.Done() // уменьшаем счетчик на 1
-			}(th, data, cur, temp, wg, mu)
+			}(th, counter, data, cur, temp, mu, wg)
 
 		}
 
-		wg.Wait()
-
-		out <- (temp[0] + temp[1] + temp[2] + temp[3] + temp[4] + temp[5])
+	}
+	wg.Wait()
+	for _, tmp := range temp {
+		out <- (tmp[0] + tmp[1] + tmp[2] + tmp[3] + tmp[4] + tmp[5])
 	}
 }
 
@@ -120,12 +130,11 @@ func CombineResults(in, out chan interface{}) {
 		}
 	}
 
-	//fmt.Printf("%v \n", arr)
 	fmt.Printf("%v", str)
 	out <- str
 }
 
-//Тестирование
+// Тестирование
 func main() {
 	inputData := []int{0, 1}
 	Hash := []job{
