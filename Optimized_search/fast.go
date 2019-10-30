@@ -7,7 +7,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"sync"
 )
 
 //easyjson:json
@@ -15,12 +14,6 @@ type JSONData struct {
 	Browsers []string `json:"browsers"`
 	Email    string   `json:"email"`
 	Name     string   `json:"name"`
-}
-
-var dataPool = sync.Pool{
-	New: func() interface{} {
-		return &JSONData{}
-	},
 }
 
 //FastSearch Вам надо написать более быструю оптимальную этой функции
@@ -31,54 +24,27 @@ func FastSearch(out io.Writer) {
 	}
 
 	reader := bufio.NewReader(file)
-
 	seenBrowsers := make(map[string]bool, 300)
 	uniqueBrowsers := 0
+	user := &JSONData{}
+	i := -1             //Итератор
+	var end error = nil //Флаг конца строки
+	var browsers []string
 
-	//Variant 1
-	users := make([]JSONData, 0, 1000)
-	rLine, _, err := reader.ReadLine()
-	for err == nil {
-		user := &JSONData{}
-		// fmt.Printf("%v %v\n", err, line)
+	fmt.Fprintln(out, "found users:")
+
+	rLine, _, end := reader.ReadLine() //Начало чтения файла
+	for end == nil {
+
 		err := user.UnmarshalJSON(rLine)
 		if err != nil {
 			panic(err)
 		}
-		users = append(users, *user)
-		rLine, _, err = reader.ReadLine()
-		if err != nil {
-			break
-		}
-	}
 
-	//Variant 2
-	// users := make(chan JSONData, 100)
-	// go func(out chan<- JSONData) {
-	// 	for err == nil {
-	// 		user := &JSONData{}
-	// 		// fmt.Printf("%v %v\n", err, line)
-	// 		err := user.UnmarshalJSON(rLine)
-	// 		if err != nil {
-	// 			panic(err)
-	// 		}
-	// 		users <- (*user)
-	// 		rLine, _, err = reader.ReadLine()
-	// 		if err != nil {
-	// 			break
-	// 		}
-	// 	}
-	// 	close(out)
-	// }(users)
-
-	fmt.Fprintln(out, "found users:")
-	i := -1
-	for _, user := range users {
 		i++
 		isAndroid := false
 		isMSIE := false
-
-		browsers := user.Browsers
+		browsers = user.Browsers
 
 		for _, browser := range browsers {
 
@@ -111,17 +77,15 @@ func FastSearch(out io.Writer) {
 
 		}
 
+		rLine, _, end = reader.ReadLine() //Переход на следующую строку с проверкой конца строки
+
 		if !(isAndroid && isMSIE) {
 			continue
 		}
 
-		// log.Println("Android and MSIE user:", user["name"], user["email"])
 		email := strings.Replace(user.Email, "@", " [at] ", 1)
-
 		fmt.Fprintln(out, "["+strconv.Itoa(i)+"] "+user.Name+" <"+email+">")
-		//temp = append(temp, "["+strconv.Itoa(i)+"] "+user.Name+" <"+email+">")
 	}
-	//fmt.Fprintln(out, "found users:\n"+buf.String())
-	//fmt.Fprintln(out, "found users:\n"+strings.Join(temp, "\n")+"\n")
+
 	fmt.Fprintln(out, "\n"+"Total unique browsers", len(seenBrowsers))
 }
