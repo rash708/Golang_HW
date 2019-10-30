@@ -1,22 +1,27 @@
 package main
 
 import (
-	"encoding/json"
+	"bufio"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
+	"strconv"
 	"strings"
+	"sync"
 )
 
-// func checkBrowser(notSeenBefore *bool, browser, item string, mu *sync.Mutex, wg *sync.WaitGroup) {
-// 	if item == browser {
-// 		mu.Lock()
-// 		*notSeenBefore = false
-// 		mu.Unlock()
-// 	}
-// 	wg.Done()
-// }
+//easyjson:json
+type JSONData struct {
+	Browsers []string `json:"browsers"`
+	Email    string   `json:"email"`
+	Name     string   `json:"name"`
+}
+
+var dataPool = sync.Pool{
+	New: func() interface{} {
+		return &JSONData{}
+	},
+}
 
 //FastSearch Вам надо написать более быструю оптимальную этой функции
 func FastSearch(out io.Writer) {
@@ -25,79 +30,83 @@ func FastSearch(out io.Writer) {
 		panic(err)
 	}
 
-	fileContents, err := ioutil.ReadAll(file)
-	if err != nil {
-		panic(err)
-	}
+	reader := bufio.NewReader(file)
 
-	seenBrowsers := []string{}
+	seenBrowsers := make(map[string]bool, 300)
 	uniqueBrowsers := 0
-	foundUsers := ""
 
-	lines := strings.Split(string(fileContents), "\n")
-
-	users := make([]map[string]interface{}, 0, 200)
-	for _, line := range lines {
-		user := make(map[string]interface{})
+	//Variant 1
+	users := make([]JSONData, 0, 1000)
+	rLine, _, err := reader.ReadLine()
+	for err == nil {
+		user := &JSONData{}
 		// fmt.Printf("%v %v\n", err, line)
-		err := json.Unmarshal([]byte(line), &user)
+		err := user.UnmarshalJSON(rLine)
 		if err != nil {
 			panic(err)
 		}
-		users = append(users, user)
+		users = append(users, *user)
+		rLine, _, err = reader.ReadLine()
+		if err != nil {
+			break
+		}
 	}
 
-	for i, user := range users {
+	//Variant 2
+	// users := make(chan JSONData, 100)
+	// go func(out chan<- JSONData) {
+	// 	for err == nil {
+	// 		user := &JSONData{}
+	// 		// fmt.Printf("%v %v\n", err, line)
+	// 		err := user.UnmarshalJSON(rLine)
+	// 		if err != nil {
+	// 			panic(err)
+	// 		}
+	// 		users <- (*user)
+	// 		rLine, _, err = reader.ReadLine()
+	// 		if err != nil {
+	// 			break
+	// 		}
+	// 	}
+	// 	close(out)
+	// }(users)
 
+	fmt.Fprintln(out, "found users:")
+	i := -1
+	for _, user := range users {
+		i++
 		isAndroid := false
 		isMSIE := false
 
-		browsers, ok := user["browsers"].([]interface{})
-		if !ok {
-			// log.Println("cant cast browsers")
-			continue
-		}
+		browsers := user.Browsers
 
-		for _, browserRaw := range browsers {
+		for _, browser := range browsers {
 
-			browser, ok := browserRaw.(string)
 			notSeenBefore := true
 
-			if !ok {
-				// log.Println("cant cast browser to string")
-				continue
-			}
+			Android := strings.Contains(browser, "Android")
+			MSIE := strings.Contains(browser, "MSIE")
 
-			if ok := strings.Contains(browser, "Android"); ok == true {
-				isAndroid = true
-				//notSeenBefore := true
-				for _, item := range seenBrowsers {
+			if (Android || MSIE) == true {
 
-					if item == browser {
-						notSeenBefore = false
-					}
+				if Android {
+					isAndroid = true
+				}
+
+				if MSIE {
+					isMSIE = true
+				}
+
+				if exist := seenBrowsers[browser]; exist == true {
+					notSeenBefore = false
 				}
 
 				if notSeenBefore {
 					// log.Printf("SLOW New browser: %s, first seen: %s", browser, user["name"])
-					seenBrowsers = append(seenBrowsers, browser)
+					seenBrowsers[browser] = true
 					uniqueBrowsers++
 				}
-			}
 
-			if ok := strings.Contains(browser, "MSIE"); ok == true {
-				isMSIE = true
-				//notSeenBefore := true
-				for _, item := range seenBrowsers {
-					if item == browser {
-						notSeenBefore = false
-					}
-				}
-				if notSeenBefore {
-					// log.Printf("SLOW New browser: %s, first seen: %s", browser, user["name"])
-					seenBrowsers = append(seenBrowsers, browser)
-					uniqueBrowsers++
-				}
 			}
 
 		}
@@ -107,10 +116,12 @@ func FastSearch(out io.Writer) {
 		}
 
 		// log.Println("Android and MSIE user:", user["name"], user["email"])
-		email := strings.Replace(user["email"].(string), "@", " [at] ", 1)
-		foundUsers += fmt.Sprintf("[%d] %s <%s>\n", i, user["name"], email)
-	}
+		email := strings.Replace(user.Email, "@", " [at] ", 1)
 
-	fmt.Fprintln(out, "found users:\n"+foundUsers)
-	fmt.Fprintln(out, "Total unique browsers", len(seenBrowsers))
+		fmt.Fprintln(out, "["+strconv.Itoa(i)+"] "+user.Name+" <"+email+">")
+		//temp = append(temp, "["+strconv.Itoa(i)+"] "+user.Name+" <"+email+">")
+	}
+	//fmt.Fprintln(out, "found users:\n"+buf.String())
+	//fmt.Fprintln(out, "found users:\n"+strings.Join(temp, "\n")+"\n")
+	fmt.Fprintln(out, "\n"+"Total unique browsers", len(seenBrowsers))
 }
